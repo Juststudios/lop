@@ -4,26 +4,52 @@ import android.nfc.NdefMessage
 import android.nfc.NdefRecord
 import android.nfc.Tag
 import android.nfc.tech.Ndef
+import java.nio.charset.Charset
 
 object NFCUtil {
 
-    fun createHandshakePayload(profileId: String): NdefMessage {
-        val record = NdefRecord.createTextRecord("en", profileId)
+    // create a MIME-record vCard NDEF message
+    fun createVCardMessage(vcard: String): NdefMessage {
+        val payload = vcard.toByteArray(Charset.forName("UTF-8"))
+        val record = NdefRecord.createMime("text/x-vcard", payload)
         return NdefMessage(arrayOf(record))
     }
 
-    fun readHandshakePayload(tag: Tag): String? {
-        val ndef = Ndef.get(tag)
-        ndef?.connect()
-        val message = ndef?.ndefMessage
-        ndef?.close()
-        return message?.records?.firstOrNull()?.toText()
+    // create a simple text record
+    fun createTextMessage(text: String): NdefMessage {
+        // Helper to create a well-formed text record
+        val payload = text.toByteArray(Charsets.UTF_8)
+        val record = NdefRecord.createMime("text/plain", payload)
+        return NdefMessage(arrayOf(record))
     }
 
-    private fun NdefRecord.toText(): String {
-        val payload = this.payload
-        val textEncoding = if ((payload[0].toInt() and 128) == 0) Charsets.UTF_8 else Charsets.UTF_16
-        val languageCodeLength = payload[0].toInt() and 63
-        return String(payload, languageCodeLength + 1, payload.size - languageCodeLength - 1, textEncoding)
+    // write an NdefMessage to a tag. Returns true if successful.
+    fun writeNdefMessageToTag(tag: Tag, message: NdefMessage): Boolean {
+        return try {
+            val ndef = Ndef.get(tag) ?: return false
+            ndef.connect()
+            if (!ndef.isWritable) {
+                ndef.close()
+                return false
+            }
+            ndef.writeNdefMessage(message)
+            ndef.close()
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    // read first record payload as UTF-8 string (if possible)
+    fun readTextFromNdef(message: NdefMessage?): String? {
+        if (message == null) return null
+        val records = message.records
+        if (records.isEmpty()) return null
+        return try {
+            String(records[0].payload, Charsets.UTF_8)
+        } catch (e: Exception) {
+            null
+        }
     }
 }

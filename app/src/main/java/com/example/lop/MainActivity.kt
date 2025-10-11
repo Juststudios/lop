@@ -1,39 +1,32 @@
 package com.example.lop.ui
 
 import android.app.AlertDialog
-import android.content.ContentValues
+import android.app.PendingIntent
 import android.content.Intent
-import android.net.Uri
-import android.nfc.NfcAdapter
 import android.nfc.NdefMessage
+import android.nfc.NdefRecord
+import android.nfc.Ndef
+import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.os.Bundle
-import android.provider.ContactsContract
+import android.widget.Button
 import android.widget.EditText
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import com.example.lop.R
-import com.example.lop.data.models.LopProfile
-import com.example.lop.network.ConnectionManager
-import com.example.lop.util.NFCUtil
+import java.io.IOException
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var nfcAdapter: NfcAdapter
+    private var nfcAdapter: NfcAdapter? = null
     private lateinit var nameField: EditText
     private lateinit var phoneField: EditText
-    private lateinit var connectionManager: ConnectionManager
+    private lateinit var shareButton: Button
+    private lateinit var settingsButton: Button
 
-    // Preloaded profile
-    private val myProfile = LopProfile(
-        name = "John Doe",
-        phoneNumber = "+1234567890",
-        email = "john@example.com",
-        instagram = "@johninsta",
-        snapchat = "johnsnap",
-        businessName = "Doe Ventures",
-        profileType = "Business"
-    )
+    private var messageToWrite: NdefMessage? = null
+    private val PREFS = "lop_prefs"
+    private val KEY_NAME = "name"
+    private val KEY_PHONE = "phone"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -41,140 +34,151 @@ class MainActivity : AppCompatActivity() {
 
         nameField = findViewById(R.id.nameField)
         phoneField = findViewById(R.id.phoneField)
+        shareButton = findViewById(R.id.shareButton)
+        settingsButton = findViewById(R.id.btnSettings)
 
-        // Pre-fill fields
-        nameField.setText(myProfile.name)
-        phoneField.setText(myProfile.phoneNumber)
+        // Load saved values
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        nameField.setText(prefs.getString(KEY_NAME, ""))
+        phoneField.setText(prefs.getString(KEY_PHONE, ""))
 
-// Initialize connection manager
-        connectionManager = ConnectionManager(this)
-        connectionManager.init()
+        settingsButton.setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
+
+        shareButton.setOnClickListener {
+            val name = nameField.text.toString().trim()
+            val phone = phoneField.text.toString().trim()
+            if (name.isEmpty() || phone.isEmpty()) {
+                Toast.makeText(this, "Please fill name and phone", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val vcard = """
+                BEGIN:VCARD
+                VERSION:3.0
+                FN:$name
+                TEL:$phone
+                END:VCARD
+            """.trimIndent()
+            messageToWrite = NdefMessage(arrayOf(
+                NdefRecord.createMime("text/x-vcard", vcard.toByteArray(Charsets.UTF_8))
+            ))
+
+            AlertDialog.Builder(this)
+                .setTitle("Share Contact")
+                .setMessage("Tap another NFC device or tag to share.")
+                .setPositiveButton("OK", null)
+                .show()
+        }
 
         nfcAdapter = NfcAdapter.getDefaultAdapter(this)
         if (nfcAdapter == null) {
-            Toast.makeText(this, "NFC not supported", Toast.LENGTH_LONG).show()
-            finish()
+            Toast.makeText(this, "NFC not available on this device", Toast.LENGTH_LONG).show()
         }
-
-
     }
 
     override fun onResume() {
         super.onResume()
-        val intent = Intent(this, javaClass).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        val pendingIntent = android.app.PendingIntent.getActivity(
-            this, 0, intent, android.app.PendingIntent.FLAG_MUTABLE
-        )
-        nfcAdapter.enableForegroundDispatch(this, pendingIntent, null, null)
+        // Refresh fields in case settings changed
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        nameField.setText(prefs.getString(KEY_NAME, ""))
+        phoneField.setText(prefs.getString(KEY_PHONE, ""))
+
+        nfcAdapter?.let { adapter ->
+            val intent = Intent(this, javaClass).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            val pending = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_MUTABLE)
+            adapter.enableForegroundDispatch(this, pending, null, null)
+        }
     }
 
     override fun onPause() {
         super.onPause()
-        nfcAdapter.disableForegroundDispatch(this)
+        nfcAdapter?.disableForegroundDispatch(this)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
 
+        // If we prepared a message and a tag was presented -> write it
         val tag: Tag? = intent.getParcelableExtra(NfcAdapter.EXTRA_TAG)
-        if (tag != null) {
-            showShareConfirmation(tag)
+        if (tag != null && messageToWrite != null) {
+            val ok = writeNdefMessageToTag(tag, messageToWrite!!)
+            Toast.makeText(this, if (ok) "Contact written to tag/device" else "Failed to write NFC", Toast.LENGTH_SHORT).show()
+            messageToWrite = null
+            return
         }
 
-        val rawMessages = intent.getParcelableArrayExtra(NfcAdapter.EXTRA_NDEF_MESSAGES)
-        if (rawMessages != null) {
-            val messages = rawMessages.map { it as NdefMessage }
-            val receivedText = String(messages[0].records[0].payload)
-            val profileParts = receivedText.split("\n").filter { it.contains(":") }
-            val receivedProfile = LopProfile(
-                name = profileParts.find { it.startsWith("FN:") }?.substringAfter("FN:") ?: "",
-                phoneNumber = profileParts.find { it.startsWith("TEL:") }?.substringAfter("TEL:") ?: "",
-                email = null,
-                instagram = null,
-                snapchat = null,
-                businessName = null,
-                profileType = "Personal"
-            )
-
-            // Start Wi-Fi Direct session to exchange full contact info
-            connectionManager.discoverPeers()
-            // Later, when WifiP2pInfo is available, call:
-            // connectionManager.startDataTransfer(wifiP2pInfo, receivedProfile.toJson()) { json -> ... }
-        }
-    }
-
-    private fun showShareConfirmation(tag: Tag) {
-        AlertDialog.Builder(this)
-            .setTitle("Share your profile?")
-            .setMessage("Do you want to share your contact/business card with this device?")
-            .setPositiveButton("Yes") { _, _ ->
-                shareProfile(tag)
+        // If we received NDEF messages (app opened by an NFC NDEF action)
+        val raw = intent.getParcelableArrayExtra(NfcAdapter.EXTRA_NDEF_MESSAGES)
+        if (raw != null && raw.isNotEmpty()) {
+            val msgs = raw.map { it as NdefMessage }
+            val record = msgs[0].records.firstOrNull()
+            val payload = record?.payload
+            payload?.let {
+                // Many vCards are stored as MIME; decode directly
+                val text = String(it, Charsets.UTF_8)
+                if (text.startsWith("BEGIN:VCARD")) {
+                    AlertDialog.Builder(this)
+                        .setTitle("Contact received")
+                        .setMessage("Import received vCard into Contacts?")
+                        .setPositiveButton("Import") { _, _ -> saveVCardImport(text) }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                } else {
+                    Toast.makeText(this, "NFC data: $text", Toast.LENGTH_SHORT).show()
+                }
             }
-            .setNegativeButton("No", null)
-            .show()
+        }
     }
 
-    private fun shareProfile(tag: Tag) {
-        // 1️⃣ Create NFC handshake message with profile ID (or phone)
-        val handshakeMessage = NFCUtil.createHandshakePayload(myProfile.phoneNumber)
-
-        // Write handshake to tag (simulated here)
-        val ndef = android.nfc.tech.Ndef.get(tag)
-        ndef?.connect()
-        ndef?.writeNdefMessage(handshakeMessage)
-        ndef?.close()
-
-        Toast.makeText(this, "Handshake sent! Starting connection...", Toast.LENGTH_SHORT).show()
-
-        // 2️⃣ Initiate Wi-Fi Direct transfer
-        val profileData = serializeProfile(myProfile)
-        connectionManager.sendProfileData(profileData)
-    }
-
-    private fun serializeProfile(profile: LopProfile): ByteArray {
-        // Simple CSV / JSON encoding
-        return """
-            ${profile.name},${profile.phoneNumber},${profile.email ?: ""},${profile.instagram ?: ""},${profile.snapchat ?: ""},${profile.businessName ?: ""},${profile.profileType}
-        """.trimIndent().toByteArray(Charsets.UTF_8)
-    }
-
-    // Optional: receive data and save to Contacts
-    fun saveContact(name: String, phone: String, email: String? = null) {
-        val values = ContentValues().apply {
-            put(ContactsContract.RawContacts.ACCOUNT_TYPE, null as String?)
-            put(ContactsContract.RawContacts.ACCOUNT_NAME, null as String?)
-        }
-        val rawContactUri = contentResolver.insert(ContactsContract.RawContacts.CONTENT_URI, values)
-        val rawContactId = rawContactUri?.lastPathSegment?.toLong() ?: return
-
-        // Name
-        val nameValues = ContentValues().apply {
-            put(ContactsContract.Data.RAW_CONTACT_ID, rawContactId)
-            put(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE)
-            put(ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME, name)
-        }
-        contentResolver.insert(ContactsContract.Data.CONTENT_URI, nameValues)
-
-        // Phone
-        val phoneValues = ContentValues().apply {
-            put(ContactsContract.Data.RAW_CONTACT_ID, rawContactId)
-            put(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE)
-            put(ContactsContract.CommonDataKinds.Phone.NUMBER, phone)
-            put(ContactsContract.CommonDataKinds.Phone.TYPE, ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE)
-        }
-        contentResolver.insert(ContactsContract.Data.CONTENT_URI, phoneValues)
-
-        // Email
-        email?.let {
-            val emailValues = ContentValues().apply {
-                put(ContactsContract.Data.RAW_CONTACT_ID, rawContactId)
-                put(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE)
-                put(ContactsContract.CommonDataKinds.Email.ADDRESS, it)
-                put(ContactsContract.CommonDataKinds.Email.TYPE, ContactsContract.CommonDataKinds.Email.TYPE_WORK)
+    // Writes NDEF to a tag/device using standard Ndef API
+    private fun writeNdefMessageToTag(tag: Tag, message: NdefMessage): Boolean {
+        try {
+            val ndef = Ndef.get(tag)
+            if (ndef != null) {
+                ndef.connect()
+                if (!ndef.isWritable) {
+                    ndef.close()
+                    return false
+                }
+                val size = message.toByteArray().size
+                if (ndef.maxSize < size) {
+                    ndef.close()
+                    return false
+                }
+                ndef.writeNdefMessage(message)
+                ndef.close()
+                return true
+            } else {
+                // Try formatable
+                val format = android.nfc.NdefFormatable.get(tag)
+                if (format != null) {
+                    format.connect()
+                    format.format(message)
+                    format.close()
+                    return true
+                }
             }
-            contentResolver.insert(ContactsContract.Data.CONTENT_URI, emailValues)
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
+        return false
+    }
 
-        Toast.makeText(this, "Contact saved!", Toast.LENGTH_SHORT).show()
+    // Start system vCard import by writing vcf file to cache and launching ACTION_VIEW
+    private fun saveVCardImport(vcard: String) {
+        try {
+            val file = java.io.File(cacheDir, "import.vcf")
+            file.writeText(vcard)
+            val uri = androidx.core.content.FileProvider.getUriForFile(this, "${packageName}.fileprovider", file)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "text/x-vcard")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(intent)
+        } catch (e: IOException) {
+            e.printStackTrace()
+            Toast.makeText(this, "Failed to import contact: ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 }
