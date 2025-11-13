@@ -1,11 +1,12 @@
-package com.example.lop.ui
+package com.example.lop
 
 import android.app.AlertDialog
 import android.app.PendingIntent
 import android.content.Intent
 import android.nfc.NdefMessage
 import android.nfc.NdefRecord
-import android.nfc.Ndef
+import android.nfc.tech.Ndef
+import android.nfc.tech.NdefFormatable
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.os.Bundle
@@ -13,6 +14,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import com.example.lop.SettingsActivity
 import java.io.IOException
 
 class MainActivity : AppCompatActivity() {
@@ -43,6 +45,7 @@ class MainActivity : AppCompatActivity() {
         phoneField.setText(prefs.getString(KEY_PHONE, ""))
 
         settingsButton.setOnClickListener {
+            Toast.makeText(this, "Share button clicked", Toast.LENGTH_SHORT).show()
             startActivity(Intent(this, SettingsActivity::class.java))
         }
 
@@ -53,6 +56,7 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Please fill name and phone", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
+
             val vcard = """
                 BEGIN:VCARD
                 VERSION:3.0
@@ -75,6 +79,7 @@ class MainActivity : AppCompatActivity() {
         if (nfcAdapter == null) {
             Toast.makeText(this, "NFC not available on this device", Toast.LENGTH_LONG).show()
         }
+        Toast.makeText(this, "Share button clicked", Toast.LENGTH_SHORT).show()
     }
 
     override fun onResume() {
@@ -151,7 +156,7 @@ class MainActivity : AppCompatActivity() {
                 return true
             } else {
                 // Try formatable
-                val format = android.nfc.NdefFormatable.get(tag)
+                val format = android.nfc.tech.NdefFormatable.get(tag)
                 if (format != null) {
                     format.connect()
                     format.format(message)

@@ -32,15 +32,21 @@
     <application
         android:allowBackup="true"
         android:label="@string/app_name"
-        android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher_round"
+        android:icon="@mipmap/lop"
+        android:roundIcon="@mipmap/lop"
         android:theme="@style/Theme.AppCompat.Light.NoActionBar"
         android:supportsRtl="true">
+        <activity
+        android:name="com.example.lop.SettingsActivity"
+        android:exported="true">
+    </activity>
+
 
         <activity
-            android:name="com.example.lop.ui.MainActivi"
+            android:name="com.example.lop.MainActivity"
             android:exported="true"
             android:launchMode="singleTop">
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
